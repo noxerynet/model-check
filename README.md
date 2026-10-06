@@ -18,7 +18,7 @@ Point Model Check at any OpenAI-compatible endpoint and it will:
 
 1. Discover models via `GET /v1/models`
 2. Verify each model with real `POST /v1/chat/completions` requests
-3. Compare the requested model ID with the `model` field in the response (identity check)
+3. Compare the requested model ID with the `model` field in the response. This only checks that the provider's own metadata is consistent — a provider can return any string there, so it does not independently prove which model served the request
 4. Report status, latency and token usage per model
 
 ## Features

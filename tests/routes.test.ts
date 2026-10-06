@@ -8,6 +8,11 @@ vi.mock("node:dns/promises", () => ({
   },
 }));
 
+vi.mock("undici", async (importOriginal) => ({
+  ...((await importOriginal()) as Record<string, unknown>),
+  fetch: vi.fn(),
+}));
+
 beforeEach(() => {
   vi.unstubAllGlobals();
 });
@@ -36,9 +41,9 @@ describe("API", () => {
   });
 
   it("lists models through the provider", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(JSON.stringify({ data: [{ id: "m-a", owned_by: "org" }] }), { status: 200 })),
+    const { fetch: upstreamFetch } = await import("undici");
+    vi.mocked(upstreamFetch).mockResolvedValue(
+      new Response(JSON.stringify({ data: [{ id: "m-a", owned_by: "org" }] }), { status: 200 }) as never,
     );
     const app = createApp();
     const res = await request(app)
@@ -47,6 +52,19 @@ describe("API", () => {
     expect(res.status).toBe(200);
     expect(res.body.count).toBe(1);
     expect(res.body.models[0].id).toBe("m-a");
+  });
+
+  it("blocks redirects to private addresses", async () => {
+    const { fetch: upstreamFetch } = await import("undici");
+    vi.mocked(upstreamFetch).mockResolvedValue(
+      new Response(null, { status: 302, headers: { location: "http://127.0.0.1:9/v1/models" } }) as never,
+    );
+    const app = createApp();
+    const res = await request(app)
+      .post("/api/providers/models")
+      .send({ baseUrl: "https://example.com/v1", apiKey: "sk-test" });
+    expect(res.status).toBe(502);
+    expect(JSON.stringify(res.body)).not.toContain("sk-test");
   });
 
   it("rejects invalid chat messages", async () => {

@@ -10,28 +10,40 @@ export class UrlBlockedError extends Error {
 
 export function isPrivateIP(ip: string): boolean {
   if (net.isIP(ip) === 0) return false;
-  if (net.isIPv6(ip)) {
-    const lower = ip.toLowerCase();
-    if (lower === "::1") return true;
-    if (lower.startsWith("fe80:")) return true;
-    if (lower.startsWith("fc") || lower.startsWith("fd")) return true;
-    if (lower === "::" || lower === "::ffff:0:0") return true;
+  if (!net.isIPv6(ip)) {
+    const parts = ip.split(".").map(Number);
+    if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
+    const [a, b] = parts;
+    if (a === 10) return true;
+    if (a === 127) return true;
+    if (a === 0) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a >= 224) return true;
     return false;
   }
-  const parts = ip.split(".").map(Number);
-  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
-  const [a, b] = parts;
-  if (a === 10) return true;
-  if (a === 127) return true;
-  if (a === 0) return true;
-  if (a === 169 && b === 254) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 168) return true;
-  if (a >= 224) return true;
+  const lower = ip.toLowerCase();
+  const dotted = lower.match(/([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})$/);
+  if (dotted) return isPrivateIP(dotted[1]);
+  const groups = lower.split(":");
+  if (groups.length === 8 && groups.slice(0, 5).every((g) => g === "0" || g === "") && groups[5] === "ffff") {
+    const hi = parseInt(groups[6], 16);
+    const lo = parseInt(groups[7], 16);
+    if (!Number.isInteger(hi) || !Number.isInteger(lo)) return true;
+    return isPrivateIP(`${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`);
+  }
+  if (lower === "::1" || lower === "0:0:0:0:0:0:0:1") return true;
+  if (lower === "::" || lower === "0:0:0:0:0:0:0:0") return true;
+  const first = parseInt(groups[0], 16);
+  if (!Number.isInteger(first)) return true;
+  if ((first & 0xffc0) === 0xfe80) return true;
+  if ((first & 0xfc00) === 0xfc00) return true;
+  if ((first & 0xff00) === 0xff00) return true;
   return false;
 }
 
-function blockHostnameShape(hostname: string): void {
+export function checkHostnameShape(hostname: string): void {
   const host = hostname.toLowerCase().replace(/\.$/, "");
   if (host === "localhost") throw new UrlBlockedError("Private network host is not allowed");
   if (net.isIP(host) !== 0) {
@@ -44,7 +56,7 @@ function blockHostnameShape(hostname: string): void {
 }
 
 export async function assertHostAllowed(hostname: string, allowPrivate: boolean): Promise<void> {
-  blockHostnameShape(hostname);
+  checkHostnameShape(hostname);
   if (allowPrivate) return;
   let records: Array<{ address: string }>;
   try {

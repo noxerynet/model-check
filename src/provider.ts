@@ -1,4 +1,7 @@
-import { assertHostAllowed, parseBaseUrl } from "./ssrf.js";
+import { checkHostnameShape, isPrivateIP, parseBaseUrl } from "./ssrf.js";
+import dns from "node:dns/promises";
+import net from "node:net";
+import { Agent, fetch as upstreamFetch, interceptors, type Dispatcher } from "undici";
 
 export type TestStatus =
   | "verified"
@@ -127,7 +130,7 @@ interface FetchBounds {
   allowPrivate: boolean;
 }
 
-async function readBounded(res: Response, maxBytes: number): Promise<string> {
+async function readBounded(res: UpstreamResponse, maxBytes: number): Promise<string> {
   const length = res.headers.get("content-length");
   if (length != null && Number(length) > maxBytes) {
     throw new ProviderError("invalid_response", `Response exceeded size limit (${maxBytes} bytes)`);
@@ -161,51 +164,130 @@ async function readBounded(res: Response, maxBytes: number): Promise<string> {
   return new TextDecoder().decode(merged);
 }
 
-async function resolveUrl(raw: string, allowPrivate: boolean): Promise<string> {
-  const url = parseBaseUrl(raw);
-  await assertHostAllowed(url.hostname, allowPrivate);
-  return url.toString();
+type UpstreamResponse = Awaited<ReturnType<typeof upstreamFetch>>;
+
+interface UpstreamInit {
+  method?: string;
+  headers: Record<string, string>;
+  body?: string;
 }
 
-async function providerFetch(
-  url: string,
-  init: RequestInit,
-  bounds: FetchBounds,
-  secrets: string[],
-): Promise<Response> {
-  let current = await resolveUrl(url, bounds.allowPrivate);
-  for (let hop = 0; hop < 3; hop++) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), bounds.timeoutMs);
-    let res: Response;
-    try {
-      res = await fetch(current, { ...init, redirect: "manual", signal: controller.signal });
-    } catch (err) {
-      clearTimeout(timer);
-      if (err instanceof ProviderError) throw err;
-      if (err instanceof Error && err.name === "AbortError") {
-        throw new ProviderError("timeout", "Provider did not respond within the configured timeout");
-      }
-      throw new ProviderError("unknown", "Could not reach provider");
-    } finally {
-      clearTimeout(timer);
+interface UpstreamResult {
+  res: UpstreamResponse;
+  done: () => Promise<void>;
+}
+
+export function buildPinnedAgent(ips: string[]): Dispatcher {
+  let i = 0;
+  const agent = new Agent().compose(
+    interceptors.dns({
+      lookup: (
+        _origin: URL,
+        _options: unknown,
+        callback: (err: Error | null, addresses: Array<{ address: string; ttl: number; family: 4 | 6 }>) => void,
+      ) => {
+        callback(
+          null,
+          ips.map((address) => ({ address, ttl: 60, family: (net.isIP(address) === 6 ? 6 : 4) as 4 | 6 })),
+        );
+      },
+      pick: (_origin: URL, records: { records: { 4: { ips: unknown[] } | null; 6: { ips: unknown[] } | null } }) => {
+        const all = [...(records.records[4]?.ips ?? []), ...(records.records[6]?.ips ?? [])];
+        return all[i++ % all.length] as { address: string; ttl: number; family: 4 | 6 };
+      },
+    }),
+  );
+  return agent;
+}
+
+async function resolvePinnedHost(hostname: string, allowPrivate: boolean): Promise<string[]> {
+  if (net.isIP(hostname) !== 0) {
+    if (!allowPrivate && isPrivateIP(hostname)) {
+      throw new ProviderError("invalid_response", "Provider address is not public");
     }
-    if (res.status >= 300 && res.status < 400) {
-      const location = res.headers.get("location");
-      await res.body?.cancel().catch(() => undefined);
-      if (location == null) throw new ProviderError("invalid_response", "Provider returned an invalid redirect");
+    return [hostname];
+  }
+  checkHostnameShape(hostname);
+  let records: Array<{ address: string }>;
+  try {
+    records = (await dns.lookup(hostname, { all: true })) as Array<{ address: string }>;
+  } catch {
+    throw new ProviderError("unknown", "Could not resolve provider host");
+  }
+  const ips = [...new Set(records.map((r) => r.address))].filter((a) => net.isIP(a) !== 0);
+  if (ips.length === 0) throw new ProviderError("unknown", "Could not resolve provider host");
+  if (!allowPrivate && ips.some((ip) => isPrivateIP(ip))) {
+    throw new ProviderError("invalid_response", "Provider resolved to a private address");
+  }
+  return ips;
+}
+
+async function fetchUpstream(url: string, init: UpstreamInit, bounds: FetchBounds): Promise<UpstreamResult> {
+  let current = url;
+  let agent: Dispatcher | null = null;
+  const closeAgent = async (): Promise<void> => {
+    if (agent) {
+      await agent.close().catch(() => undefined);
+      agent = null;
+    }
+  };
+  try {
+    for (let hop = 0; hop < 3; hop++) {
+      let hostname: string;
       try {
-        current = await resolveUrl(new URL(location, current).toString(), bounds.allowPrivate);
+        hostname = parseBaseUrl(current).hostname;
       } catch {
         throw new ProviderError("invalid_response", "Provider returned an unsafe redirect");
       }
-      continue;
+      await closeAgent();
+      agent = buildPinnedAgent(await resolvePinnedHost(hostname, bounds.allowPrivate));
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), bounds.timeoutMs);
+      let res: UpstreamResponse;
+      try {
+        res = await upstreamFetch(current, {
+          method: init.method,
+          headers: init.headers,
+          body: init.body,
+          redirect: "manual",
+          signal: controller.signal,
+          dispatcher: agent,
+        });
+      } catch (err) {
+        clearTimeout(timer);
+        if (err instanceof ProviderError) throw err;
+        if (err instanceof Error && err.name === "AbortError") {
+          throw new ProviderError("timeout", "Provider did not respond within the configured timeout");
+        }
+        throw new ProviderError("unknown", "Could not reach provider");
+      } finally {
+        clearTimeout(timer);
+      }
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get("location");
+        await res.body?.cancel().catch(() => undefined);
+        if (location == null) throw new ProviderError("invalid_response", "Provider returned an invalid redirect");
+        try {
+          current = new URL(location, current).toString();
+        } catch {
+          throw new ProviderError("invalid_response", "Provider returned an unsafe redirect");
+        }
+        continue;
+      }
+      const ready = agent;
+      agent = null;
+      return {
+        res,
+        done: async () => {
+          await ready.close().catch(() => undefined);
+        },
+      };
     }
-    return res;
+    throw new ProviderError("invalid_response", "Too many redirects from provider");
+  } catch (err) {
+    await closeAgent();
+    throw err;
   }
-  void redactSecrets;
-  void secrets;
-  throw new ProviderError("invalid_response", "Too many redirects from provider");
 }
 
 function mapHttpError(status: number, bodyText: string, apiKey: string): ProviderError {
@@ -261,20 +343,24 @@ function authHeaders(ctx: CallContext): Record<string, string> {
 
 export async function fetchModels(ctx: CallContext): Promise<{ models: NormalizedModel[]; latencyMs: number }> {
   const started = Date.now();
-  const res = await providerFetch(`${ctx.baseUrl}/models`, { headers: authHeaders(ctx) }, ctx, [ctx.apiKey]);
-  const latencyMs = Date.now() - started;
-  if (!res.ok) {
-    const text = await readBounded(res, ctx.maxBytes).catch(() => "");
-    throw mapHttpError(res.status, text, ctx.apiKey);
-  }
-  const text = await readBounded(res, ctx.maxBytes);
-  let payload: unknown;
+  const { res, done } = await fetchUpstream(`${ctx.baseUrl}/models`, { headers: authHeaders(ctx) }, ctx);
   try {
-    payload = JSON.parse(text);
-  } catch {
-    throw new ProviderError("invalid_response", "Provider returned invalid JSON for model list");
+    const latencyMs = Date.now() - started;
+    if (!res.ok) {
+      const text = await readBounded(res, ctx.maxBytes).catch(() => "");
+      throw mapHttpError(res.status, text, ctx.apiKey);
+    }
+    const text = await readBounded(res, ctx.maxBytes);
+    let payload: unknown;
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      throw new ProviderError("invalid_response", "Provider returned invalid JSON for model list");
+    }
+    return { models: normalizeModels(payload), latencyMs };
+  } finally {
+    await done();
   }
-  return { models: normalizeModels(payload), latencyMs };
 }
 
 interface ChatCallResult {
@@ -292,7 +378,7 @@ export async function runChatOnce(
   maxTokens = 64,
 ): Promise<ChatCallResult> {
   const started = Date.now();
-  const res = await providerFetch(
+  const { res, done } = await fetchUpstream(
     `${ctx.baseUrl}/chat/completions`,
     {
       method: "POST",
@@ -300,35 +386,38 @@ export async function runChatOnce(
       body: JSON.stringify({ model, messages, max_tokens: maxTokens, stream: false }),
     },
     ctx,
-    [ctx.apiKey],
   );
-  const latencyMs = Date.now() - started;
-  if (!res.ok) {
-    const text = await readBounded(res, ctx.maxBytes).catch(() => "");
-    throw mapHttpError(res.status, text, ctx.apiKey);
-  }
-  const text = await readBounded(res, ctx.maxBytes);
-  let payload: unknown;
   try {
-    payload = JSON.parse(text);
-  } catch {
-    throw new ProviderError("invalid_response", "Provider returned invalid JSON");
+    const latencyMs = Date.now() - started;
+    if (!res.ok) {
+      const text = await readBounded(res, ctx.maxBytes).catch(() => "");
+      throw mapHttpError(res.status, text, ctx.apiKey);
+    }
+    const text = await readBounded(res, ctx.maxBytes);
+    let payload: unknown;
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      throw new ProviderError("invalid_response", "Provider returned invalid JSON");
+    }
+    if (payload == null || typeof payload !== "object") {
+      throw new ProviderError("invalid_response", "Provider returned an unexpected response shape");
+    }
+    const record = payload as Record<string, unknown>;
+    const choices = Array.isArray(record.choices) ? record.choices : [];
+    const first = choices[0] as Record<string, unknown> | undefined;
+    const message = first?.message as Record<string, unknown> | undefined;
+    const content = typeof message?.content === "string" ? message.content : "";
+    return {
+      httpStatus: res.status,
+      latencyMs,
+      content,
+      returnedModel: typeof record.model === "string" ? record.model : null,
+      usage: record.usage ?? null,
+    };
+  } finally {
+    await done();
   }
-  if (payload == null || typeof payload !== "object") {
-    throw new ProviderError("invalid_response", "Provider returned an unexpected response shape");
-  }
-  const record = payload as Record<string, unknown>;
-  const choices = Array.isArray(record.choices) ? record.choices : [];
-  const first = choices[0] as Record<string, unknown> | undefined;
-  const message = first?.message as Record<string, unknown> | undefined;
-  const content = typeof message?.content === "string" ? message.content : "";
-  return {
-    httpStatus: res.status,
-    latencyMs,
-    content,
-    returnedModel: typeof record.model === "string" ? record.model : null,
-    usage: record.usage ?? null,
-  };
 }
 
 export async function* streamChat(
@@ -337,7 +426,7 @@ export async function* streamChat(
   messages: ChatMessage[],
   maxTokens = 512,
 ): AsyncGenerator<{ delta: string } | { done: true; returnedModel: string | null }, void, void> {
-  const res = await providerFetch(
+  const { res, done } = await fetchUpstream(
     `${ctx.baseUrl}/chat/completions`,
     {
       method: "POST",
@@ -345,53 +434,61 @@ export async function* streamChat(
       body: JSON.stringify({ model, messages, max_tokens: maxTokens, stream: true }),
     },
     ctx,
-    [ctx.apiKey],
   );
-  if (!res.ok) {
-    const text = await readBounded(res, ctx.maxBytes).catch(() => "");
-    throw mapHttpError(res.status, text, ctx.apiKey);
-  }
-  if (res.body == null) throw new ProviderError("invalid_response", "Provider returned an empty stream");
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let returnedModel: string | null = null;
-  let gotChunk = false;
   try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const frames = buffer.split("\n\n");
-      buffer = frames.pop() ?? "";
-      for (const frame of frames) {
-        const lines = frame.split("\n").filter((l) => l.startsWith("data:"));
-        for (const line of lines) {
-          const data = line.slice(5).trim();
-          if (data === "" || data === "[DONE]") continue;
-          let parsed: Record<string, unknown>;
-          try {
-            parsed = JSON.parse(data) as Record<string, unknown>;
-          } catch {
-            continue;
-          }
-          if (typeof parsed.model === "string" && returnedModel == null) returnedModel = parsed.model;
-          const choice = (Array.isArray(parsed.choices) ? parsed.choices[0] : undefined) as
-            | Record<string, unknown>
-            | undefined;
-          const delta = choice?.delta as Record<string, unknown> | undefined;
-          if (typeof delta?.content === "string" && delta.content.length > 0) {
-            gotChunk = true;
-            yield { delta: delta.content };
+    if (!res.ok) {
+      const text = await readBounded(res, ctx.maxBytes).catch(() => "");
+      throw mapHttpError(res.status, text, ctx.apiKey);
+    }
+    if (res.body == null) throw new ProviderError("invalid_response", "Provider returned an empty stream");
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let streamedBytes = 0;
+    let returnedModel: string | null = null;
+    let gotChunk = false;
+    try {
+      for (;;) {
+        const { done: readerDone, value } = await reader.read();
+        if (readerDone) break;
+        buffer += decoder.decode(value, { stream: true });
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? "";
+        for (const frame of frames) {
+          const lines = frame.split("\n").filter((l) => l.startsWith("data:"));
+          for (const line of lines) {
+            const data = line.slice(5).trim();
+            if (data === "" || data === "[DONE]") continue;
+            let parsed: Record<string, unknown>;
+            try {
+              parsed = JSON.parse(data) as Record<string, unknown>;
+            } catch {
+              continue;
+            }
+            if (typeof parsed.model === "string" && returnedModel == null) returnedModel = parsed.model;
+            const choice = (Array.isArray(parsed.choices) ? parsed.choices[0] : undefined) as
+              | Record<string, unknown>
+              | undefined;
+            const delta = choice?.delta as Record<string, unknown> | undefined;
+            if (typeof delta?.content === "string" && delta.content.length > 0) {
+              streamedBytes += delta.content.length;
+              if (streamedBytes > ctx.maxBytes) {
+                throw new ProviderError("invalid_response", "Provider stream exceeded size limit");
+              }
+              gotChunk = true;
+              yield { delta: delta.content };
+            }
           }
         }
       }
+    } finally {
+      await reader.cancel().catch(() => undefined);
     }
+    if (!gotChunk) throw new ProviderError("invalid_response", "Provider stream produced no content");
+    yield { done: true, returnedModel };
   } finally {
-    await reader.cancel().catch(() => undefined);
+    await done();
   }
-  if (!gotChunk) throw new ProviderError("invalid_response", "Provider stream produced no content");
-  yield { done: true, returnedModel };
 }
 
 function toStatus(err: unknown): { status: TestStatus; httpStatus: number | null; message: string } {

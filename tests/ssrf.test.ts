@@ -13,6 +13,32 @@ describe("isPrivateIP", () => {
       expect(isPrivateIP(ip)).toBe(false);
     }
   });
+
+  it("blocks IPv6 private, mapped and reserved forms", () => {
+    for (const ip of [
+      "::1",
+      "0:0:0:0:0:0:0:1",
+      "::",
+      "0:0:0:0:0:0:0:0",
+      "fe80::1",
+      "febf::1",
+      "fc00::1",
+      "fd00::1",
+      "ff02::1",
+      "::ffff:10.0.0.1",
+      "::ffff:127.0.0.1",
+      "0:0:0:0:0:ffff:0a00:1",
+      "0:0:0:0:0:ffff:7f00:1",
+    ]) {
+      expect(isPrivateIP(ip)).toBe(true);
+    }
+  });
+
+  it("allows public IPv6 including mapped public IPv4", () => {
+    for (const ip of ["2606:4700:4700::1111", "2001:4860:4860::8888", "::ffff:8.8.8.8"]) {
+      expect(isPrivateIP(ip)).toBe(false);
+    }
+  });
 });
 
 describe("parseBaseUrl", () => {

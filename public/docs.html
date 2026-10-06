@@ -22,7 +22,7 @@
     <h2>Adding a provider</h2>
     <p>Enter a provider name, the base URL of an OpenAI-compatible API (for example <code>https://api.openai.com/v1</code>) and an API key. Model Check calls <code>GET {baseUrl}/models</code> with <code>Authorization: Bearer &lt;key&gt;</code> and normalizes the <code>id</code>, <code>object</code>, <code>created</code> and <code>owned_by</code> fields.</p>
     <h2>Testing a model</h2>
-    <p>Testing sends real <code>POST {baseUrl}/chat/completions</code> requests. Each check records status, HTTP status, latency, the raw response and any error. Model identity is a strict comparison of the requested ID with the <code>model</code> field in the API response: <code>match</code>, <code>mismatch</code> or <code>unavailable</code>.</p>
+    <p>Testing sends real <code>POST {baseUrl}/chat/completions</code> requests. Each check records status, HTTP status, latency, the raw response and any error. Model identity is a strict comparison of the requested ID with the <code>model</code> field in the API response: <code>match</code>, <code>mismatch</code> or <code>unavailable</code>. This checks the provider's own metadata for consistency only; a provider can return any string there, so it does not independently prove which model served the request.</p>
     <h2>API</h2>
     <pre>GET  /api/health
 POST /api/providers/test    { baseUrl, apiKey, headers? }
