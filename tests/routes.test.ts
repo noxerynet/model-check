@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { createApp } from "../src/server.js";
 
@@ -12,10 +12,6 @@ vi.mock("undici", async (importOriginal) => ({
   ...((await importOriginal()) as Record<string, unknown>),
   fetch: vi.fn(),
 }));
-
-beforeEach(() => {
-  vi.unstubAllGlobals();
-});
 
 describe("API", () => {
   it("serves health", async () => {

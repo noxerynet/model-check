@@ -302,7 +302,8 @@ function mapHttpError(status: number, bodyText: string, apiKey: string): Provide
     return new ProviderError("failed", "Provider unavailable", status);
   }
   const detail = extractErrorMessage(bodyText);
-  return new ProviderError("failed", detail ?? `Provider returned HTTP ${status}`, status);
+  const message = detail != null ? redactSecrets(detail, [apiKey]) : `Provider returned HTTP ${status}`;
+  return new ProviderError("failed", message, status);
 }
 
 function extractErrorMessage(bodyText: string): string | null {
