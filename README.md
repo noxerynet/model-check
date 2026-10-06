@@ -1,18 +1,33 @@
 # Model Check
 
-OpenAI-compatible API endpoints için model discovery, availability testing and response verification tool.
+<p>
+  <a href="https://check.noxery.net"><img src="docs/noxery-logo.png" alt="Noxery" width="180" /></a>
+</p>
 
-Powered by [Noxery](https://noxery.net).
+[![CI](https://github.com/noxerynet/model-check/actions/workflows/ci.yml/badge.svg)](https://github.com/noxerynet/model-check/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/Node-20%2B-green.svg)](https://nodejs.org)
+
+Model discovery, availability testing and response verification for OpenAI-compatible APIs.
+
+Live demo: [check.noxery.net](https://check.noxery.net)
+
+## What it does
+
+Point Model Check at any OpenAI-compatible endpoint and it will:
+
+1. Discover models via `GET /v1/models`
+2. Verify each model with real `POST /v1/chat/completions` requests
+3. Compare the requested model ID with the `model` field in the response (identity check)
+4. Report status, latency and token usage per model
 
 ## Features
 
 - Add any OpenAI-compatible provider with base URL and API key
-- Discover models via `GET /v1/models`
-- Verify models with real `POST /v1/chat/completions` requests
-- Model identity check (requested vs. returned model ID)
 - Test suite: basic, arithmetic, instruction following, JSON, identity, streaming
 - Chat with streaming, latency and token usage
 - SSRF protection, rate limiting, timeouts, response size limits
+- API keys stay in browser memory only — never stored or logged
 
 ## Requirements
 
@@ -22,7 +37,7 @@ Powered by [Noxery](https://noxery.net).
 ## Installation
 
 ```bash
-git clone https://github.com/noxery/model-check.git
+git clone https://github.com/noxerynet/model-check.git
 cd model-check
 npm install
 cp .env.example .env
@@ -92,3 +107,7 @@ npm run build
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+---
+
+Powered by [Noxery](https://noxery.net)
