@@ -3,6 +3,7 @@
 
   const session = { name: "", baseUrl: "", apiKey: "", headers: {} };
   const models = new Map();
+  const selected = new Set();
   let selectedModel = null;
 
   const $ = (id) => document.getElementById(id);
@@ -26,7 +27,8 @@
 
   $("clearBtn").addEventListener("click", () => {
     session.name = ""; session.baseUrl = ""; session.apiKey = ""; session.headers = {};
-    models.clear(); selectedModel = null;
+    models.clear(); selected.clear(); selectedModel = null;
+    updateSelectedBtn();
     $("modelsBody").textContent = "";
     for (const id of ["summary", "modelsSection", "detailSection", "chatSection"]) $(id).hidden = true;
     $("clearBtn").hidden = true;
@@ -80,22 +82,52 @@
       if (m.id === selectedModel) tr.className = "selected";
       const latency = m.latencyMs != null ? `${m.latencyMs} ms` : "—";
       tr.innerHTML =
+        `<td class="check-col"></td>` +
         `<td><code></code></td>` +
         `<td></td><td></td><td></td>` +
         `<td></td>`;
-      tr.children[0].firstChild.textContent = m.id;
-      tr.children[1].innerHTML = statusPill(m.status);
-      tr.children[2].innerHTML = identityPill(m.identity);
-      tr.children[3].textContent = latency;
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = selected.has(m.id);
+      box.setAttribute("aria-label", `Select ${m.id}`);
+      box.addEventListener("change", () => {
+        if (box.checked) selected.add(m.id);
+        else selected.delete(m.id);
+        updateSelectedBtn();
+        syncSelectAll();
+      });
+      tr.children[0].appendChild(box);
+      tr.children[1].firstChild.textContent = m.id;
+      tr.children[2].innerHTML = statusPill(m.status);
+      tr.children[3].innerHTML = identityPill(m.identity);
+      tr.children[4].textContent = latency;
       const btn = document.createElement("button");
       btn.className = "btn";
       btn.type = "button";
       btn.textContent = "Open";
       btn.addEventListener("click", () => selectModel(m.id));
-      tr.children[4].appendChild(btn);
+      tr.children[5].appendChild(btn);
       body.appendChild(tr);
     }
+    syncSelectAll();
   }
+
+  function updateSelectedBtn() {
+    const btn = $("runSelectedBtn");
+    btn.textContent = selected.size > 0 ? `Test selected (${selected.size})` : "Test selected";
+    btn.disabled = selected.size === 0;
+  }
+
+  function syncSelectAll() {
+    $("selectAll").checked = models.size > 0 && selected.size === models.size;
+  }
+
+  $("selectAll").addEventListener("change", (e) => {
+    selected.clear();
+    if (e.target.checked) for (const id of models.keys()) selected.add(id);
+    renderModels();
+    updateSelectedBtn();
+  });
 
   function updateSummary() {
     let working = 0, failed = 0, unknown = 0;
@@ -150,6 +182,8 @@
       session.apiKey = $("apiKey").value;
       session.headers = headers;
       models.clear();
+      selected.clear();
+      updateSelectedBtn();
       for (const m of data.models) {
         models.set(m.id, { ...m, status: null, identity: null, latencyMs: null });
       }
@@ -171,27 +205,40 @@
     }
   });
 
+  async function quickCheck(id) {
+    const m = models.get(id);
+    if (!m) return;
+    try {
+      const data = await api("/api/models/test", { ...basePayload(), model: id, tests: ["basic"] });
+      const r = data.results[0];
+      m.status = r ? r.status : "unknown";
+      m.identity = r ? r.identity : "unavailable";
+      m.latencyMs = r ? r.latencyMs : null;
+    } catch {
+      m.status = "failed";
+    }
+    renderModels();
+    updateSummary();
+  }
+
+  $("runSelectedBtn").addEventListener("click", async () => {
+    const btn = $("runSelectedBtn");
+    btn.disabled = true;
+    try {
+      for (const id of [...selected]) {
+        if (!models.has(id)) selected.delete(id);
+        else await quickCheck(id);
+      }
+    } finally {
+      updateSelectedBtn();
+    }
+  });
+
   $("runAllBtn").addEventListener("click", async () => {
     const btn = $("runAllBtn");
     btn.disabled = true;
     try {
-      for (const m of models.values()) {
-        try {
-          const data = await api("/api/models/test", {
-            ...basePayload(),
-            model: m.id,
-            tests: ["basic"],
-          });
-          const r = data.results[0];
-          m.status = r ? r.status : "unknown";
-          m.identity = r ? r.identity : "unavailable";
-          m.latencyMs = r ? r.latencyMs : null;
-        } catch {
-          m.status = "failed";
-        }
-        renderModels();
-        updateSummary();
-      }
+      for (const m of models.values()) await quickCheck(m.id);
     } finally {
       btn.disabled = false;
     }

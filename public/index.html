@@ -63,6 +63,7 @@
         <div><dt>Unknown</dt><dd id="statUnknown">—</dd></div>
       </dl>
       <div class="row">
+        <button id="runSelectedBtn" class="btn primary" type="button" disabled>Test selected</button>
         <button id="runAllBtn" class="btn" type="button">Run quick check on all models</button>
       </div>
       <p id="summaryNote" class="muted"></p>
@@ -73,7 +74,7 @@
       <div class="table-wrap">
         <table id="modelsTable">
           <thead>
-            <tr><th>Model</th><th>Status</th><th>Identity</th><th>Latency</th><th></th></tr>
+            <tr><th class="check-col"><input type="checkbox" id="selectAll" aria-label="Select all models" /></th><th>Model</th><th>Status</th><th>Identity</th><th>Latency</th><th></th></tr>
           </thead>
           <tbody id="modelsBody"></tbody>
         </table>
