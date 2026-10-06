@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Documentation — Model Check</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body class="docs">
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="/">Model Check</a>
+      <nav class="header-nav">
+        <a href="https://github.com/noxery/model-check" target="_blank" rel="noopener">GitHub</a>
+        <a href="/docs">Documentation</a>
+      </nav>
+    </div>
+    <div class="wrap powered">Powered by <a href="https://noxery.net" target="_blank" rel="noopener">Noxery</a></div>
+  </header>
+  <main class="wrap">
+    <h1>Documentation</h1>
+    <h2>Adding a provider</h2>
+    <p>Enter a provider name, the base URL of an OpenAI-compatible API (for example <code>https://api.openai.com/v1</code>) and an API key. Model Check calls <code>GET {baseUrl}/models</code> with <code>Authorization: Bearer &lt;key&gt;</code> and normalizes the <code>id</code>, <code>object</code>, <code>created</code> and <code>owned_by</code> fields.</p>
+    <h2>Testing a model</h2>
+    <p>Testing sends real <code>POST {baseUrl}/chat/completions</code> requests. Each check records status, HTTP status, latency, the raw response and any error. Model identity is a strict comparison of the requested ID with the <code>model</code> field in the API response: <code>match</code>, <code>mismatch</code> or <code>unavailable</code>.</p>
+    <h2>API</h2>
+    <pre>GET  /api/health
+POST /api/providers/test    { baseUrl, apiKey, headers? }
+POST /api/providers/models  { baseUrl, apiKey, headers? }
+POST /api/models/test       { baseUrl, apiKey, model, tests? }
+POST /api/models/chat       { baseUrl, apiKey, model, messages, stream? }</pre>
+    <h2>Security notes</h2>
+    <p>API keys are kept in browser memory only and forwarded per request; they are never written to logs or error messages. Base URLs are validated against SSRF (private ranges and metadata addresses are blocked unless <code>ALLOW_PRIVATE_NETWORKS=true</code> is set for local testing). Requests are rate limited and bounded by a timeout and a maximum response size.</p>
+  </main>
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <span>Model Check · Open-source (MIT)</span>
+      <span>Powered by <a href="https://noxery.net" target="_blank" rel="noopener">Noxery</a></span>
+    </div>
+  </footer>
+</body>
+</html>

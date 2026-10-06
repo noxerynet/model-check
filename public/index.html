@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Model Check — OpenAI-compatible API model verification</title>
+  <meta name="description" content="Check OpenAI-compatible APIs and verify the models they expose." />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="/">Model Check</a>
+      <nav class="header-nav">
+        <a href="https://github.com/noxery/model-check" target="_blank" rel="noopener">GitHub</a>
+        <a href="/docs">Documentation</a>
+        <button id="themeToggle" class="ghost-btn" type="button" aria-label="Toggle theme">Theme</button>
+      </nav>
+    </div>
+    <div class="wrap powered">Powered by <a href="https://noxery.net" target="_blank" rel="noopener">Noxery</a></div>
+  </header>
+
+  <main class="wrap">
+    <section class="hero">
+      <h1>Check OpenAI-compatible APIs and verify the models they expose.</h1>
+      <p class="muted">Add a provider, discover its models via <code>/v1/models</code>, then run real <code>/v1/chat/completions</code> requests to verify availability, latency and model identity.</p>
+      <div class="hero-actions">
+        <button id="addProviderBtn" class="btn primary" type="button">Add Provider</button>
+        <button id="clearBtn" class="btn" type="button" hidden>Disconnect</button>
+      </div>
+      <p class="hint">Your API key stays in memory for this tab only. It is sent to your provider through this server and never stored.</p>
+    </section>
+
+    <section id="providerForm" class="card" hidden>
+      <h2>Add provider</h2>
+      <form id="providerInputs">
+        <label>Provider name
+          <input id="providerName" name="providerName" type="text" placeholder="Example Provider" maxlength="80" autocomplete="off" />
+        </label>
+        <label>Base URL
+          <input id="baseUrl" name="baseUrl" type="url" placeholder="https://example.com/v1" required maxlength="500" autocomplete="off" />
+        </label>
+        <label>API key
+          <input id="apiKey" name="apiKey" type="password" placeholder="sk-..." required maxlength="500" autocomplete="off" />
+        </label>
+        <label>Custom headers (optional JSON)
+          <textarea id="customHeaders" name="customHeaders" rows="2" placeholder='{"X-Organization": "..."}'></textarea>
+        </label>
+        <div class="row">
+          <button class="btn primary" type="submit" id="connectBtn">Connect &amp; list models</button>
+        </div>
+        <p id="formError" class="error" hidden></p>
+      </form>
+    </section>
+
+    <section id="summary" class="card" hidden>
+      <h2 id="summaryTitle">Provider</h2>
+      <dl class="stats">
+        <div><dt>Endpoint</dt><dd id="statEndpoint">—</dd></div>
+        <div><dt>Models</dt><dd id="statModels">—</dd></div>
+        <div><dt>Working</dt><dd id="statWorking">—</dd></div>
+        <div><dt>Failed</dt><dd id="statFailed">—</dd></div>
+        <div><dt>Unknown</dt><dd id="statUnknown">—</dd></div>
+      </dl>
+      <div class="row">
+        <button id="runAllBtn" class="btn" type="button">Run quick check on all models</button>
+      </div>
+      <p id="summaryNote" class="muted"></p>
+    </section>
+
+    <section id="modelsSection" hidden>
+      <h2>Models</h2>
+      <div class="table-wrap">
+        <table id="modelsTable">
+          <thead>
+            <tr><th>Model</th><th>Status</th><th>Identity</th><th>Latency</th><th></th></tr>
+          </thead>
+          <tbody id="modelsBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="detailSection" class="card" hidden>
+      <h2 id="detailTitle">Model detail</h2>
+      <div id="detailMeta" class="muted"></div>
+      <div class="row">
+        <button id="suiteBtn" class="btn primary" type="button">Run test suite</button>
+        <button id="chatOpenBtn" class="btn" type="button">Try model</button>
+      </div>
+      <div id="suiteResults"></div>
+    </section>
+
+    <section id="chatSection" class="card" hidden>
+      <h2>Chat <span id="chatModelLabel" class="muted"></span></h2>
+      <div id="chatMeta" class="muted"></div>
+      <div id="chatLog" class="chat-log" aria-live="polite"></div>
+      <form id="chatForm" class="chat-form">
+        <input id="chatInput" type="text" placeholder="Ask something..." maxlength="4000" autocomplete="off" />
+        <button class="btn primary" type="submit">Send</button>
+      </form>
+      <p id="chatError" class="error" hidden></p>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <span>Model Check · Open-source (MIT)</span>
+      <span>Powered by <a href="https://noxery.net" target="_blank" rel="noopener">Noxery</a></span>
+    </div>
+  </footer>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>
